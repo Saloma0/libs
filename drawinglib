@@ -1,0 +1,417 @@
+local RunService = game:GetService("RunService")
+local CoreGui = game:GetService("CoreGui")
+
+local clamp = math.clamp
+local fromOffset = UDim2.fromOffset
+local fromEnum = Font.fromEnum
+local newColor3 = Color3.new
+local newVector2 = Vector2.new
+local newUDim2 = UDim2.new
+
+local camera = workspace.CurrentCamera
+local drawingUI = Instance.new("ScreenGui")
+drawingUI.Name = "DrawingLib SaloMenu"
+drawingUI.IgnoreGuiInset = true
+drawingUI.DisplayOrder = 0x7FFFFFFF
+drawingUI.ResetOnSpawn = false
+drawingUI.Parent = CoreGui
+
+local drawingFontsEnum = {
+    [0] = fromEnum(Enum.Font.Roboto),
+    [1] = fromEnum(Enum.Font.Legacy),
+    [2] = fromEnum(Enum.Font.SourceSans),
+    [3] = fromEnum(Enum.Font.RobotoMono)
+}
+
+local drawingObjects = setmetatable({}, {__mode = "k"})
+
+local function getFontFromIndex(fontIndex)
+    return drawingFontsEnum[clamp(fontIndex, 0, 3)] or drawingFontsEnum[0]
+end
+
+local function convertTransparency(transparency)
+    return clamp(1 - transparency, 0, 1)
+end
+
+local baseDrawingObj = {
+    Visible = true,
+    ZIndex = 1,
+    Transparency = 0,
+    Color = newColor3(1, 1, 1),
+    
+    Remove = function(self)
+        if self._guiObject and self._guiObject.Parent then
+            self._guiObject:Destroy()
+        end
+        drawingObjects[self] = nil
+    end,
+    
+    Destroy = function(self)
+        self:Remove()
+    end,
+    
+    SetProperty = function(self, index, value)
+        if self[index] ~= nil then
+            self[index] = value
+        else
+            warn("Attempted to set invalid property: " .. tostring(index))
+        end
+    end,
+    
+    GetProperty = function(self, index)
+        return self[index]
+    end,
+    
+    SetParent = function(self, parent)
+        if self._guiObject then
+            self._guiObject.Parent = parent
+        end
+    end
+}
+
+local drawingMetatable = {
+    __tostring = function() return "DrawingObject" end,
+    __index = function(self, index)
+        if index == "Remove" or index == "Destroy" then
+            return baseDrawingObj[index]
+        end
+        return rawget(self, "_properties")[index]
+    end,
+    __newindex = function(self, index, value)
+        local properties = rawget(self, "_properties")
+        if properties[index] == nil then 
+            warn("Invalid property: " .. tostring(index))
+            return 
+        end
+        
+        properties[index] = value
+        if self._updateFunctions[index] then
+            self._updateFunctions[index](self._guiObject, value)
+        end
+    end
+}
+
+local function createDrawingObject(properties, updateFunctions, createGuiFunction)
+    local drawingObj = {
+        _properties = properties,
+        _updateFunctions = updateFunctions,
+        _guiObject = createGuiFunction(properties)
+    }
+    
+    drawingObjects[drawingObj] = true
+    
+    -- Aplicar propriedades iniciais
+    for property, value in pairs(properties) do
+        if updateFunctions[property] then
+            updateFunctions[property](drawingObj._guiObject, value)
+        end
+    end
+    
+    return setmetatable(drawingObj, drawingMetatable)
+end
+
+local DrawingLib = {
+    Fonts = {
+        UI = 0,
+        System = 1,
+        Plex = 2,
+        Monospace = 3
+    }
+}
+
+function DrawingLib.createLine()
+    local properties = {
+        From = newVector2(0, 0),
+        To = newVector2(100, 100),
+        Thickness = 1,
+        Visible = true,
+        ZIndex = 1,
+        Transparency = 0,
+        Color = newColor3(1, 1, 1),
+        Parent = drawingUI
+    }
+    
+    local function createGui()
+        local frame = Instance.new("Frame")
+        frame.Name = "Line"
+        frame.AnchorPoint = Vector2.new(0.5, 0.5)
+        frame.BorderSizePixel = 0
+        frame.Parent = drawingUI
+        return frame
+    end
+    
+    local updateFunctions = {
+        From = function(gui, value)
+            local to = properties.To
+            local direction = to - value
+            local center = (to + value) / 2
+            local distance = direction.Magnitude
+            local theta = math.deg(math.atan2(direction.Y, direction.X))
+            
+            gui.Position = fromOffset(center.X, center.Y)
+            gui.Rotation = theta
+            gui.Size = fromOffset(distance, properties.Thickness)
+        end,
+        
+        To = function(gui, value)
+            local from = properties.From
+            local direction = value - from
+            local center = (value + from) / 2
+            local distance = direction.Magnitude
+            local theta = math.deg(math.atan2(direction.Y, direction.X))
+            
+            gui.Position = fromOffset(center.X, center.Y)
+            gui.Rotation = theta
+            gui.Size = fromOffset(distance, properties.Thickness)
+        end,
+        
+        Thickness = function(gui, value)
+            local from, to = properties.From, properties.To
+            local distance = (to - from).Magnitude
+            gui.Size = fromOffset(distance, value)
+        end,
+        
+        Visible = function(gui, value) gui.Visible = value end,
+        ZIndex = function(gui, value) gui.ZIndex = value end,
+        Transparency = function(gui, value) 
+            gui.BackgroundTransparency = convertTransparency(value) 
+        end,
+        Color = function(gui, value) gui.BackgroundColor3 = value end,
+        Parent = function(gui, value) gui.Parent = value end
+    }
+    
+    return createDrawingObject(properties, updateFunctions, createGui)
+end
+
+function DrawingLib.createText()
+    local properties = {
+        Text = "",
+        Font = DrawingLib.Fonts.UI,
+        Size = 14,
+        Position = newVector2(0, 0),
+        Center = false,
+        Outline = false,
+        OutlineColor = newColor3(0, 0, 0),
+        Visible = true,
+        ZIndex = 1,
+        Transparency = 0,
+        Color = newColor3(1, 1, 1),
+        Parent = drawingUI
+    }
+    
+    local function createGui()
+        local textLabel = Instance.new("TextLabel")
+        textLabel.Name = "Text"
+        textLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+        textLabel.BorderSizePixel = 0
+        textLabel.BackgroundTransparency = 1
+        textLabel.Text = properties.Text
+        textLabel.FontFace = getFontFromIndex(properties.Font)
+        textLabel.TextSize = properties.Size
+        
+        local uiStroke = Instance.new("UIStroke")
+        uiStroke.Thickness = 1.5
+        uiStroke.Enabled = properties.Outline
+        uiStroke.Color = properties.OutlineColor
+        uiStroke.Parent = textLabel
+        
+        textLabel.Parent = drawingUI
+        
+        return textLabel
+    end
+    
+    local function updatePosition(gui)
+        local textBounds = gui.TextBounds
+        local offset = textBounds / 2
+        gui.Size = fromOffset(textBounds.X, textBounds.Y)
+        
+        if properties.Center then
+            local viewportSize = camera.ViewportSize
+            gui.Position = fromOffset(viewportSize.X / 2, viewportSize.Y / 2)
+        else
+            gui.Position = fromOffset(
+                properties.Position.X + offset.X, 
+                properties.Position.Y + offset.Y
+            )
+        end
+    end
+    
+    local updateFunctions = {
+        Text = function(gui, value) 
+            gui.Text = value
+            updatePosition(gui)
+        end,
+        
+        Font = function(gui, value) 
+            gui.FontFace = getFontFromIndex(value)
+            updatePosition(gui)
+        end,
+        
+        Size = function(gui, value) 
+            gui.TextSize = value
+            updatePosition(gui)
+        end,
+        
+        Position = function(gui, value)
+            updatePosition(gui)
+        end,
+        
+        Center = function(gui, value)
+            updatePosition(gui)
+        end,
+        
+        Outline = function(gui, value)
+            gui.UIStroke.Enabled = value
+        end,
+        
+        OutlineColor = function(gui, value)
+            gui.UIStroke.Color = value
+        end,
+        
+        Visible = function(gui, value) gui.Visible = value end,
+        ZIndex = function(gui, value) gui.ZIndex = value end,
+        
+        Transparency = function(gui, value)
+            local transparency = convertTransparency(value)
+            gui.TextTransparency = transparency
+            gui.UIStroke.Transparency = transparency
+        end,
+        
+        Color = function(gui, value) gui.TextColor3 = value end,
+        Parent = function(gui, value) gui.Parent = value end
+    }
+    
+    local drawingObj = createDrawingObject(properties, updateFunctions, createGui)
+    
+    -- Conectar evento de mudança de texto para atualizar posição
+    drawingObj._guiObject:GetPropertyChangedSignal("TextBounds"):Connect(function()
+        updatePosition(drawingObj._guiObject)
+    end)
+    
+    return drawingObj
+end
+
+function DrawingLib.createCircle()
+    local properties = {
+        Radius = 50,
+        Position = newVector2(100, 100),
+        Thickness = 1,
+        Filled = false,
+        Visible = true,
+        ZIndex = 1,
+        Transparency = 0,
+        Color = newColor3(1, 1, 1),
+        Parent = drawingUI
+    }
+    
+    local function createGui()
+        local frame = Instance.new("Frame")
+        frame.Name = "Circle"
+        frame.AnchorPoint = Vector2.new(0.5, 0.5)
+        frame.BorderSizePixel = 0
+        frame.Size = fromOffset(properties.Radius * 2, properties.Radius * 2)
+        frame.Position = fromOffset(properties.Position.X, properties.Position.Y)
+        
+        local uiCorner = Instance.new("UICorner")
+        uiCorner.CornerRadius = UDim.new(1, 0)
+        uiCorner.Parent = frame
+        
+        local uiStroke = Instance.new("UIStroke")
+        uiStroke.Thickness = properties.Thickness
+        uiStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        uiStroke.Parent = frame
+        
+        frame.Parent = drawingUI
+        return frame
+    end
+    
+    local updateFunctions = {
+        Radius = function(gui, value)
+            local diameter = value * 2
+            gui.Size = fromOffset(diameter, diameter)
+        end,
+        
+        Position = function(gui, value)
+            gui.Position = fromOffset(value.X, value.Y)
+        end,
+        
+        Thickness = function(gui, value)
+            gui.UIStroke.Thickness = clamp(value, 0.6, 10)
+        end,
+        
+        Filled = function(gui, value)
+            gui.BackgroundTransparency = value and convertTransparency(properties.Transparency) or 1
+            gui.UIStroke.Enabled = not value
+        end,
+        
+        Visible = function(gui, value) gui.Visible = value end,
+        ZIndex = function(gui, value) gui.ZIndex = value end,
+        
+        Transparency = function(gui, value)
+            local transparency = convertTransparency(value)
+            gui.BackgroundTransparency = properties.Filled and transparency or 1
+            gui.UIStroke.Transparency = transparency
+        end,
+        
+        Color = function(gui, value)
+            gui.BackgroundColor3 = value
+            gui.UIStroke.Color = value
+        end,
+        
+        Parent = function(gui, value) gui.Parent = value end
+    }
+    
+    return createDrawingObject(properties, updateFunctions, createGui)
+end
+
+-- Implementações para Square, Image, Quad, Triangle, etc. seguem o mesmo padrão...
+
+-- Função para criar novos objetos (compatibilidade com API original)
+function DrawingLib.new(drawingType)
+    local creationFunctions = {
+        Line = DrawingLib.createLine,
+        Text = DrawingLib.createText,
+        Circle = DrawingLib.createCircle,
+        Square = DrawingLib.createSquare,
+        Image = DrawingLib.createImage,
+        Quad = DrawingLib.createQuad,
+        Triangle = DrawingLib.createTriangle
+    }
+    
+    local func = creationFunctions[drawingType]
+    if func then
+        return func()
+    else
+        error("Invalid drawing type: " .. tostring(drawingType))
+    end
+end
+
+-- Funções utilitárias
+local drawingFunctions = {
+    isrenderobj = function(drawingObj)
+        return drawingObjects[drawingObj] == true
+    end,
+    
+    getrenderproperty = function(drawingObj, property)
+        if drawingObjects[drawingObj] then
+            return drawingObj[property]
+        end
+        return nil
+    end,
+    
+    setrenderproperty = function(drawingObj, property, value)
+        if drawingObjects[drawingObj] then
+            drawingObj[property] = value
+        else
+            warn("Attempted to set property on invalid drawing object")
+        end
+    end,
+    
+    cleardrawcache = function()
+        for drawingObj in pairs(drawingObjects) do
+            drawingObj:Remove()
+        end
+    end
+}
+
+return {Drawing = DrawingLib, functions = drawingFunctions}
